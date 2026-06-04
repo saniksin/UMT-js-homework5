@@ -1,0 +1,47 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+
+  announcements Announcement[]
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Announcement {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  price       Float
+  category    String // 'sale' | 'service' | 'job' | 'other'
+  contactInfo String
+  imageUrl    String? // URL фото з Cloudinary; опціональне — оголошення можна створити без фото
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
