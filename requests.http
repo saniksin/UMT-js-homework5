@@ -9,8 +9,7 @@
 @baseUrl = http://localhost:3000
 
 # Заповнюється вручну: скопіюйте accessToken з відповіді на login (розділ 0).
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwianRpIjoiYmM5NWMyODBjZTExMWI4NCIsImlhdCI6MTc4MDU4NDM4NiwiZXhwIjoxNzgwNTg1Mjg2fQ.PadpgjMNGqxG2uH_iERTzU_ZVz-y3Enu7vhe5dlRfZI
-
+@token = 
 
 ### =================================================================
 ### 0. Підготовка — отримати accessToken (потрібен для фото)
