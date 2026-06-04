@@ -9,7 +9,7 @@
 @baseUrl = http://localhost:3000
 
 # Заповнюється вручну: скопіюйте accessToken з відповіді на login (розділ 0).
-@token =
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwianRpIjoiYmM5NWMyODBjZTExMWI4NCIsImlhdCI6MTc4MDU4NDM4NiwiZXhwIjoxNzgwNTg1Mjg2fQ.PadpgjMNGqxG2uH_iERTzU_ZVz-y3Enu7vhe5dlRfZI
 
 
 ### =================================================================
@@ -123,15 +123,15 @@ Content-Type: application/json
 
 ### 3.3. PATCH — додати/замінити фото оголошення (замініть 1 на реальний id).
 # @no-cookie-jar
-PATCH {{baseUrl}}/announcements/1
+PATCH {{baseUrl}}/announcements/26
 Authorization: Bearer {{token}}
 Content-Type: multipart/form-data; boundary=----Boundary
 
 ------Boundary
-Content-Disposition: form-data; name="image"; filename="test-image.jpg"
+Content-Disposition: form-data; name="image"; filename="test-image2.jpg"
 Content-Type: image/jpeg
 
-< ./test-image.jpg
+< ./test-image2.jpg
 ------Boundary--
 
 
