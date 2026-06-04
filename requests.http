@@ -1,636 +1,233 @@
-### Variables
+### =================================================================
+### homework12 — Безпека (helmet, CORS, rate limiting), логування (pino),
+### фото оголошень (multer + Cloudinary).
+###
+### Усі запити позначені `# @no-cookie-jar` — опція REST Client (VS Code),
+### що вимикає cookie jar, аби кожен запит був детермінованим.
+### =================================================================
+
 @baseUrl = http://localhost:3000
 
-# Заповнюються вручну з відповідей: login повертає accessToken, POST
-# /announcements повертає id оголошення (потрібно для секції 9 — ownership).
-@tokenAlice           = 
-@tokenBob             = 
-@aliceRefresh         = 
-@aliceAnnouncementId  = 
-@bobAnnouncementId    = 
-
-###
-### ⚙️ Усі запити позначені директивою `# @no-cookie-jar` — це опція
-### розширення REST Client (VS Code), яка вимикає cookie jar для одного
-### запиту. Завдяки цьому кожен запит детермінований: жодних «прихованих»
-### cookies від попередніх відповідей. Якщо вашому інструменту така
-### директива невідома — вона просто буде ігнорована як коментар.
-###
+# Заповнюється вручну: скопіюйте accessToken з відповіді на login (розділ 0).
+@token =
 
 
 ### =================================================================
-### КРИТЕРІЙ 1 — Схема БД та міграція (2 бали)
-### =================================================================
-### Перевіряється не HTTP-запитом, а наявністю таблиць у dev.db:
-###   `npx prisma migrate dev` створює таблиці User, RefreshToken,
-###   Announcement (зі стовпцем userId). Можна перевірити так:
-###     sqlite3 dev.db ".schema User"
-###     sqlite3 dev.db ".schema RefreshToken"
-###     sqlite3 dev.db ".schema Announcement"
-
-
-### =================================================================
-### КРИТЕРІЙ 2 — POST /auth/register (2 бали)
+### 0. Підготовка — отримати accessToken (потрібен для фото)
 ### =================================================================
 
-### -----------------------------------------------------------------
-### 2.1. Реєстрація Аліси → 201 + user (без password) +
-###      accessToken + refreshToken. Refresh також ставиться в HttpOnly cookie.
-### -----------------------------------------------------------------
+### 0.1. Реєстрація користувача → 201 + accessToken
+### (подію "User registered" видно в логах сервера — pino)
 # @no-cookie-jar
 POST {{baseUrl}}/auth/register
 Content-Type: application/json
 
 {
-  "username": "alice",
-  "password": "alice-pass-123",
-  "name": "Аліса"
+  "username": "veloman",
+  "password": "velo-pass-123",
+  "name": "Веломан"
 }
 
-### -----------------------------------------------------------------
-### 2.2. Реєстрація Боба → 201
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/register
-Content-Type: application/json
-
-{
-  "username": "bob",
-  "password": "bob-pass-123",
-  "name": "Боб"
-}
-
-### -----------------------------------------------------------------
-### 2.3. Дублікат username → 409 "User with this username already exists"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/register
-Content-Type: application/json
-
-{
-  "username": "alice",
-  "password": "any-pass-123",
-  "name": "Інша Аліса"
-}
-
-### -----------------------------------------------------------------
-### 2.4. Валідаційні помилки → 400 (username < 3, password < 6, name < 2)
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/register
-Content-Type: application/json
-
-{
-  "username": "a",
-  "password": "1",
-  "name": "X"
-}
-
-
-### =================================================================
-### КРИТЕРІЙ 3 — POST /auth/login (2 бали)
-### =================================================================
-
-### -----------------------------------------------------------------
-### 3.1. Успішний вхід як alice → 200 + accessToken + refreshToken.
-###      Скопіюйте accessToken до @tokenAlice вгорі файлу,
-###      а refreshToken — до @aliceRefresh (знадобиться у 4.1).
-### -----------------------------------------------------------------
+### 0.2. Вхід → 200 + accessToken. Скопіюйте accessToken у @token вгорі.
+### (подію "User logged in" видно в логах сервера — pino)
 # @no-cookie-jar
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 {
-  "username": "alice",
-  "password": "alice-pass-123"
-}
-
-### -----------------------------------------------------------------
-### 3.2. Логін як bob → 200. Скопіюйте accessToken до @tokenBob вгорі.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{
-  "username": "bob",
-  "password": "bob-pass-123"
-}
-
-### -----------------------------------------------------------------
-### 3.3. Неіснуючий username → 401 "Invalid credentials"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{
-  "username": "nobody",
-  "password": "whatever"
-}
-
-### -----------------------------------------------------------------
-### 3.4. Невірний пароль → 401 із тим самим повідомленням "Invalid credentials"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{
-  "username": "alice",
-  "password": "wrong-password"
+  "username": "veloman",
+  "password": "velo-pass-123"
 }
 
 
 ### =================================================================
-### КРИТЕРІЙ 4 — POST /auth/refresh (2 бали)
+### 1. Helmet (критерій 1)
 ### =================================================================
-
-### -----------------------------------------------------------------
-### 4.1. Refresh через ТІЛО запиту → 200 + НОВА пара токенів.
-###      ВСТАВТЕ актуальний refreshToken (із відповіді 3.1) у @aliceRefresh.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/refresh
-Content-Type: application/json
-
-{
-  "refreshToken": "{{aliceRefresh}}"
-}
-
-### -----------------------------------------------------------------
-### 4.2. Refresh через COOKIE — переоприсуємо її явно через заголовок
-###      Cookie, тіло порожнє. Сервер бере токен із cookie.
-###      → 200 + НОВА пара токенів (cookie має пріоритет над body).
-###      УВАГА: після 4.1 старий aliceRefresh вже видалено ротацією,
-###      тому для 4.2 спочатку оновіть @aliceRefresh новим значенням
-###      із відповіді 4.1.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/refresh
-Cookie: refreshToken={{aliceRefresh}}
-
-### -----------------------------------------------------------------
-### 4.3. Refresh із вигаданим токеном → 401 (запис не знайдено в БД)
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/refresh
-Content-Type: application/json
-
-{
-  "refreshToken": "this-token-was-never-issued"
-}
-
-### -----------------------------------------------------------------
-### 4.4. Повторне використання вже використаного refresh → 401.
-###      Доказ, що token rotation реально працює — старий запис
-###      видалено з БД після 4.1, тому навіть валідний раніше токен
-###      більше не приймається.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/refresh
-Content-Type: application/json
-
-{
-  "refreshToken": "{{aliceRefresh}}"
-}
-
-### -----------------------------------------------------------------
-### 4.5. Refresh без токена (порожнє тіло і без cookie) → 401
-###      "Refresh token not provided".
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/refresh
-Content-Type: application/json
-
-{}
-
-
-### =================================================================
-### КРИТЕРІЙ 5 — POST /auth/logout (1 бал)
-### =================================================================
-
-### -----------------------------------------------------------------
-### 5.1. Logout як alice → 200, cookie очищається, refresh видаляється з БД.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/logout
-Authorization: Bearer {{tokenAlice}}
-
-### -----------------------------------------------------------------
-### 5.2. Logout без токена → 401.
-###      Маршрут /auth/logout — захищений:
-###      "Захищений маршрут. Інвалідує refresh token поточного
-###      користувача..."). Без `Authorization: Bearer` сервер не може
-###      визначити «поточного користувача», тому повертає 401.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/logout
-
-### -----------------------------------------------------------------
-### 5.3. ПОВТОРНИЙ logout із тим самим access token (валідний 15 хв) → 200.
-###      Доказ: «Якщо в базі не знайдено токена —
-###      все одно поверніть 200». Контролер викликає `deleteMany`, який
-###      просто не знаходить нічого (refresh уже видалений у 5.1), але
-###      не падає — endpoint ідемпотентний.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/auth/logout
-Authorization: Bearer {{tokenAlice}}
-
-###
-### Після 5.1/5.3 потрібен новий логін, щоб мати валідний accessToken для
-### подальших запитів. Виконайте 3.1 ще раз і оновіть @tokenAlice / @aliceRefresh.
-###
-
-
-### =================================================================
-### КРИТЕРІЙ 6 — GET /auth/me (1 бал)
-### =================================================================
-
-### -----------------------------------------------------------------
-### 6.1. Профіль авторизованого користувача → 200, БЕЗ поля password
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/auth/me
-Authorization: Bearer {{tokenAlice}}
-
-### -----------------------------------------------------------------
-### 6.2. /auth/me без токена → 401 "Authentication required"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/auth/me
-
-
-### =================================================================
-### КРИТЕРІЙ 7 — Middleware автентифікації (2 бали)
-### =================================================================
-
-### -----------------------------------------------------------------
-### 7.1. Невалідний (підроблений) JWT → 401 "Invalid or expired token"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/auth/me
-Authorization: Bearer this.is.not.a.real.jwt
-
-### -----------------------------------------------------------------
-### 7.2. JWT із валідним base64-форматом, але невірним підписом → 401
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/auth/me
-Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIiwiZXhwIjoxfQ.fake
-
-
-### =================================================================
-### КРИТЕРІЙ 8 — Захист маршрутів оголошень (2 бали)
-### =================================================================
-
-### -----------------------------------------------------------------
-### 8.1. GET /announcements залишається ПУБЛІЧНИМ → 200.
-###      Перевіряється тільки доступність ендпоінта без токена. Якщо БД
-###      порожня — повертається `{data: [], pagination: {total: 0, ...}}`
-###      (REST API не повертає 404 для порожньої колекції, лише для
-###      конкретного неіснуючого ресурсу типу /announcements/9999).
-###      Щоб одразу побачити дані — або запустіть `npm run db:seed`,
-###      або спершу виконайте 8.4 (alice створить оголошення).
-### -----------------------------------------------------------------
+### У вкладці Headers відповіді мають бути безпечні заголовки helmet
+### (X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security,
+### Referrer-Policy тощо), а заголовок X-Powered-By — відсутній.
 # @no-cookie-jar
 GET {{baseUrl}}/announcements
 
-### -----------------------------------------------------------------
-### 8.2. GET /announcements/:id залишається ПУБЛІЧНИМ → 200.
-###      Замініть `1` на реальний id з відповіді 8.4 (або з `npm run db:seed`).
-###      Для неіснуючого id → 404.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/announcements/1
-
-### -----------------------------------------------------------------
-### 8.3. POST без токена → 401 (захист працює)
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/announcements
-Content-Type: application/json
-
-{
-  "title": "Спроба без авторизації",
-  "description": "Тут має бути 401",
-  "price": 100,
-  "category": "sale",
-  "contactInfo": "phone1"
-}
-
-### -----------------------------------------------------------------
-### 8.4. POST з токеном alice → 201, userId автоматично = alice.id.
-###      Скопіюйте `id` з відповіді у @aliceAnnouncementId вгорі —
-###      він потрібен для тестів ownership у секції 9.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/announcements
-Authorization: Bearer {{tokenAlice}}
-Content-Type: application/json
-
-{
-  "title": "Оголошення Аліси",
-  "description": "Опис від Аліси, який буде довшим за десять символів",
-  "price": 250,
-  "category": "sale",
-  "contactInfo": "+380501112233"
-}
-
-### -----------------------------------------------------------------
-### 8.5. POST з токеном bob → 201, userId = bob.id.
-###      Скопіюйте `id` з відповіді у @bobAnnouncementId.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-POST {{baseUrl}}/announcements
-Authorization: Bearer {{tokenBob}}
-Content-Type: application/json
-
-{
-  "title": "Оголошення Боба",
-  "description": "Опис від Боба, який буде довшим за десять символів",
-  "price": 9000,
-  "category": "sale",
-  "contactInfo": "+380672223344"
-}
-
-### -----------------------------------------------------------------
-### 8.6. PATCH без токена → 401
-### -----------------------------------------------------------------
-# @no-cookie-jar
-PATCH {{baseUrl}}/announcements/{{aliceAnnouncementId}}
-Content-Type: application/json
-
-{ "price": 999 }
-
-### -----------------------------------------------------------------
-### 8.7. DELETE без токена → 401
-### -----------------------------------------------------------------
-# @no-cookie-jar
-DELETE {{baseUrl}}/announcements/{{aliceAnnouncementId}}
-
 
 ### =================================================================
-### КРИТЕРІЙ 9 — Ownership (2 бали)
-### =================================================================
-###
-### Використовуються id, які повернули 8.4 (alice) та 8.5 (bob).
-### Не забудьте заповнити @aliceAnnouncementId і @bobAnnouncementId вгорі.
-###
-
-### -----------------------------------------------------------------
-### 9.1. alice оновлює СВОЄ оголошення → 200
-### -----------------------------------------------------------------
-# @no-cookie-jar
-PATCH {{baseUrl}}/announcements/{{aliceAnnouncementId}}
-Authorization: Bearer {{tokenAlice}}
-Content-Type: application/json
-
-{ "price": 17500 }
-
-### -----------------------------------------------------------------
-### 9.2. bob намагається ОНОВИТИ оголошення alice → 403 "Access denied"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-PATCH {{baseUrl}}/announcements/{{aliceAnnouncementId}}
-Authorization: Bearer {{tokenBob}}
-Content-Type: application/json
-
-{ "price": 1 }
-
-### -----------------------------------------------------------------
-### 9.3. bob намагається ВИДАЛИТИ оголошення alice → 403 "Access denied"
-### -----------------------------------------------------------------
-# @no-cookie-jar
-DELETE {{baseUrl}}/announcements/{{aliceAnnouncementId}}
-Authorization: Bearer {{tokenBob}}
-
-### -----------------------------------------------------------------
-### 9.4. bob оновлює СВОЄ оголошення → 200
-### -----------------------------------------------------------------
-# @no-cookie-jar
-PATCH {{baseUrl}}/announcements/{{bobAnnouncementId}}
-Authorization: Bearer {{tokenBob}}
-Content-Type: application/json
-
-{ "price": 8888 }
-
-### -----------------------------------------------------------------
-### 9.5. bob ВИДАЛЯЄ своє оголошення → 204
-### -----------------------------------------------------------------
-# @no-cookie-jar
-DELETE {{baseUrl}}/announcements/{{bobAnnouncementId}}
-Authorization: Bearer {{tokenBob}}
-
-
-### =================================================================
-### КРИТЕРІЙ 10 — Swagger (2 бали)
+### 2. CORS (критерій 2)
 ### =================================================================
 
-### -----------------------------------------------------------------
-### 10.1. Swagger UI має відкриватися на /api-docs (відкрийте у браузері)
-###       → http://localhost:3000/api-docs
-### -----------------------------------------------------------------
-
-
-### -----------------------------------------------------------------
-### 10.2. OpenAPI JSON
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/api-docs.json
-
-
-### =================================================================
-### КРИТЕРІЙ 11 (hw12) — Базова безпека: Helmet та CORS
-### =================================================================
-
-### -----------------------------------------------------------------
-### 11.1. Helmet — у відповіді присутні безпечні заголовки
-###       (X-Content-Type-Options, X-Frame-Options, тощо), а X-Powered-By
-###       відсутній. Подивіться вкладку Headers відповіді.
-### -----------------------------------------------------------------
-# @no-cookie-jar
-GET {{baseUrl}}/announcements
-
-### -----------------------------------------------------------------
-### 11.2. CORS — дозволений origin (із ALLOWED_ORIGINS) → у відповіді є
-###       заголовок Access-Control-Allow-Origin.
-### -----------------------------------------------------------------
+### 2.1. Дозволений origin (є в ALLOWED_ORIGINS) → у відповіді присутній
+###      заголовок Access-Control-Allow-Origin.
 # @no-cookie-jar
 GET {{baseUrl}}/announcements
 Origin: http://localhost:5173
 
-### -----------------------------------------------------------------
-### 11.3. CORS — недозволений origin → 403 "Not allowed by CORS".
-### -----------------------------------------------------------------
+### 2.2. Недозволений origin → 403 "Not allowed by CORS".
 # @no-cookie-jar
 GET {{baseUrl}}/announcements
 Origin: http://evil.example.com
 
 
 ### =================================================================
-### КРИТЕРІЙ 12 (hw12) — Rate limiting на auth-маршрути
+### 3. Фото оголошення (критерії 5, 6) — multipart/form-data
 ### =================================================================
-###
-### Ліміт — 10 запитів з однієї IP за 15 хвилин на будь-який /auth-маршрут.
-### Виконайте всі запити нижче підряд: з 1-го по 10-й повертається 401
-### (невірні креди — але запит проходить limiter), а з 11-го —
-### 429 "Too many requests, please try again later".
-### Скидається ліміт через 15 хвилин (або перезапуском сервера).
-###
+### Потрібен валідний accessToken у @token (розділ 0).
+### Поряд із цим файлом лежить test-image.jpg.
 
-### 12.1 (1/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.2 (2/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.3 (3/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.4 (4/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.5 (5/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.6 (6/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.7 (7/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.8 (8/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.9 (9/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.10 (10/11)
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-### 12.11 (11/11) → 429 "Too many requests, please try again later"
-# @no-cookie-jar
-POST {{baseUrl}}/auth/login
-Content-Type: application/json
-
-{ "username": "ratelimit", "password": "wrong-pass" }
-
-
-### =================================================================
-### КРИТЕРІЙ 13 (hw12) — Завантаження фото оголошення
-### =================================================================
-###
-### Запит надсилається як multipart/form-data. Поле `image` — файл.
-### Покладіть будь-яке зображення поруч із цим файлом під назвою
-### `test-image.jpg` (або змініть шлях у директиві `< ...`).
-### Потрібен валідний accessToken у @tokenAlice (виконайте 3.1).
-###
-
-### -----------------------------------------------------------------
-### 13.1. POST з фото → 201, у відповіді поле imageUrl з URL Cloudinary.
-### -----------------------------------------------------------------
+### 3.1. Створення оголошення З фото → 201, у відповіді imageUrl з Cloudinary.
+###      (події "Announcement photo uploaded" та "Announcement created" — у логах)
 # @no-cookie-jar
 POST {{baseUrl}}/announcements
-Authorization: Bearer {{tokenAlice}}
-Content-Type: multipart/form-data; boundary=----Boundary12
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----Boundary
 
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="title"
 
 Продам велосипед Trek
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="description"
 
 Trek у відмінному стані, майже не використовувався
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="price"
 
 8500
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="category"
 
 sale
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="contactInfo"
 
 veloman@gmail.com
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="image"; filename="test-image.jpg"
 Content-Type: image/jpeg
 
 < ./test-image.jpg
-------Boundary12--
+------Boundary--
 
-### -----------------------------------------------------------------
-### 13.2. POST без фото → 201, imageUrl = null (фото опціональне).
-### -----------------------------------------------------------------
+### 3.2. Створення оголошення БЕЗ фото → 201, imageUrl = null
+###      (imageUrl опціональне).
 # @no-cookie-jar
 POST {{baseUrl}}/announcements
-Authorization: Bearer {{tokenAlice}}
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "title": "Оголошення без фото",
-  "description": "Опис довший за десять символів, фото відсутнє",
-  "price": 1200,
-  "category": "other",
-  "contactInfo": "+380501112233"
+  "title": "Велокамера 28 дюймів",
+  "description": "Нова велокамера, підходить для шосейних велосипедів",
+  "price": 250,
+  "category": "sale",
+  "contactInfo": "veloman@gmail.com"
 }
 
-### -----------------------------------------------------------------
-### 13.3. PATCH — додати/замінити фото існуючого оголошення.
-###       Замініть `1` на реальний id вашого оголошення.
-### -----------------------------------------------------------------
+### 3.3. PATCH — додати/замінити фото оголошення (замініть 1 на реальний id).
 # @no-cookie-jar
 PATCH {{baseUrl}}/announcements/1
-Authorization: Bearer {{tokenAlice}}
-Content-Type: multipart/form-data; boundary=----Boundary12
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----Boundary
 
-------Boundary12
+------Boundary
 Content-Disposition: form-data; name="image"; filename="test-image.jpg"
 Content-Type: image/jpeg
 
 < ./test-image.jpg
-------Boundary12--
+------Boundary--
+
+
+### =================================================================
+### 4. Rate limiting (критерій 3) — ВИКОНУЙТЕ ОСТАННІМ
+### =================================================================
+### Ліміт — 10 запитів з однієї IP за 15 хвилин на будь-який /auth-маршрут
+### (рахуються і register, і login). Для чистого підрахунку перезапустіть
+### сервер перед цією секцією: тоді запити 1-10 → 401, а 11-й → 429
+### "Too many requests, please try again later".
+### (Запити навмисно з невірним паролем — нас цікавить лише лічильник лімітера.)
+
+### 4.1 (1)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.2 (2)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.3 (3)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.4 (4)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.5 (5)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.6 (6)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.7 (7)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.8 (8)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.9 (9)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.10 (10)
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+### 4.11 (11) → 429 "Too many requests, please try again later"
+# @no-cookie-jar
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "username": "veloman", "password": "wrong" }
+
+
+### =================================================================
+### 5. Swagger (критерій 7)
+### =================================================================
+### 5.1. Swagger UI — відкрийте у браузері: http://localhost:3000/api-docs
+###      (маршрути POST/PATCH /announcements задокументовані як multipart/form-data)
+
+### 5.2. OpenAPI JSON
+# @no-cookie-jar
+GET {{baseUrl}}/api-docs.json
